@@ -1,0 +1,202 @@
+// #include <Arduino.h>
+
+// #define DT A0
+// #define SCK A1
+
+// long sample = 0;
+// float val = 0;
+// long count = 0;
+
+// unsigned long readCount(void)
+// {
+//   unsigned long Count;
+//   unsigned char i;
+//   pinMode(DT, OUTPUT);
+//   digitalWrite(DT, HIGH);
+//   digitalWrite(SCK, LOW);
+//   Count = 0;
+//   pinMode(DT, INPUT);
+//   while (digitalRead(DT))
+//     ;
+//   for (i = 0; i < 24; i++)
+//   {
+//     digitalWrite(SCK, HIGH);
+//     Count = Count << 1;
+//     digitalWrite(SCK, LOW);
+//     if (digitalRead(DT))
+//       Count++;
+//   }
+//   digitalWrite(SCK, HIGH);
+//   Count = Count ^ 0x800000;
+//   digitalWrite(SCK, LOW);
+//   return (Count);
+// }
+
+// void calibrate()
+// {
+
+//   Serial.println("Calibrating...");
+//   Serial.println("Please Wait...");
+//   for (int i = 0; i < 100; i++)
+//   {
+//     count = readCount();
+//     sample += count;
+//   }
+//   sample /= 100;
+//   Serial.println("Put 100g & wait");
+//   count = 0;
+//   while (count < 1000)
+//   {
+//     count = readCount();
+//     count = sample - count;
+//   }
+//   Serial.println("Please Wait...");
+//   for (int i = 0; i < 100; i++)
+//   {
+//     count = readCount();
+//     val += sample - count;
+//   }
+//   val = val / 100.0;
+//   val = val / 100.0; // put here your calibrating weight
+// }
+
+// void setup()
+// {
+//   Serial.begin(9600);
+//   pinMode(SCK, OUTPUT);
+//   delay(1000);
+// }
+
+// void loop()
+// {
+//   count = readCount();
+//   int w = (((count - sample) / val) - 2 * ((count - sample) / val));
+
+//   Serial.print("Measured Weight");
+//   Serial.print(w);
+//   Serial.println("g ");
+
+// }
+
+
+///////////////////////////////////////////////////////////
+//                                                       //
+//          Tecnologia em Mecatrônica Industrial         //
+// Disciplina de Microprocessadores e Microcontroladores //
+//             Professor: Aldinei Aragão                 //
+//                 Semestre 2022.2                       //
+//                                                       //
+///////////////////////////////////////////////////////////
+
+// Bibliotecas
+#include <Arduino.h>
+#include <avr/io.h>
+#include <util/delay.h>
+#include <avr/interrupt.h>
+#include <stdio.h>
+#include <avr/pgmspace.h>
+
+/* Definição do baud rate*/
+#define BAUD 9600
+#define MYUBRR F_CPU / 16 / BAUD - 1
+
+// Varaiveis Globais
+char buffer[3]; // buffer para converter os digitos em string
+char bufferfreq[6]; // buffer para converter os digitos em string
+volatile unsigned int leADC_i, resto, valor, cont0;
+unsigned int tempo_borda, delta, frequencia;
+float leADC_f, periodo;
+
+/* Rotina de inicialização da USART */
+void USART_Init(unsigned int ubrr)
+{
+  UBRR0H = (unsigned char)(ubrr >> 8); // Ajusta a taxa de transmissão
+  UBRR0L = (unsigned char)ubrr;
+  UCSR0B = (1 << RXEN0) | (1 << TXEN0); // Habilita o transmissor e o receptor
+  UCSR0B |= (1 << RXCIE0);              // Habilita a interrupção na recepção completa
+  UCSR0C = (3 << UCSZ00);               // Ajusta o formato do frame:
+                                        // 8 bits de dados e 1 de parada
+}
+/* Rotina de transmissão da USART */
+void USART_Transmit(unsigned char data)
+{
+  while (!(UCSR0A & (1 << UDRE0)))
+    ;          // Espera a limpeza do registr. de transmissão
+  UDR0 = data; // Coloca o dado no registrador e o envia
+}
+/* Rotina de transmissão de strings */
+void USART_String(char *data)
+{ // LED1 Ligado\0
+  for (; *data != 0; data++)
+    USART_Transmit(*data);
+}
+/* Rotina de recepção da USART */
+unsigned char USART_Receive(void)
+{
+  while (!(UCSR0A & (1 << RXC0)))
+    ;          // Espera o dado ser recebido
+  return UDR0; // Lê o dado recebido e retorna
+}
+
+int main()
+{
+  Serial.begin(9600);
+
+  DDRB &= ~(1 << 0);                    // PB0 como entrada para captura de sinal
+  TCCR1A = 0x00;                        // Modo normal
+  TCCR1B |= (1 << ICES1) | (1 << CS12); // Borda de subida e Prescaler 256
+  TIMSK1 = (1 << ICIE1);                // Habilita a interrupção por captura
+
+  DDRC &= ~(1 << 0);   // PC0 como entrada para o LM35
+  DIDR0 = (1 << 0);    // Desliga PC0 como digital
+  ADMUX = 0b01000000;  // Tref=AVCC, justificado a direita, CANAL ADC0
+  ADCSRA = 0b11101111; // Habilita ADC, inicia conversão, auto-trigger, interruoção habilita e Prescaler=128
+  ADCSRB = 0x00;       // Triger no modo de conversão continua
+
+  TCCR0A = 0x00;                      // Modo de operação normal
+  TCCR0B = (1 << CS02) | (1 << CS00); // Prescaler = 1024
+  TIMSK0 |= (1 << TOIE0);             // Habilita a interrupção do timer 0
+  TCNT0 = 193;                        // Valor de TNCT0
+
+  sei(); // Habilita as interrupções gerais
+
+  while (1)
+  {
+    sprintf(bufferfreq, "freq:%d", frequencia);
+    USART_String(bufferfreq);
+    sprintf(buffer, "Temp:%d\n", leADC_i);
+    USART_String(buffer);
+    _delay_ms(1000);
+  }
+}
+
+ISR(TIMER1_CAPT_vect)
+{
+  if (TCCR1B & (1 << ICES1)) // Testa a borda de subida
+    tempo_borda = ICR1;      // Atribi o valor de ICR1
+  else
+  {
+    delta = (ICR1 - tempo_borda) * 16; // Calcula a difereça de tempo
+    periodo = (delta * 2.0) / 1000.0;  // Calcula o periodo e conver us para ms
+    frequencia = (1000 / periodo);     // Calcula a frequencia
+  }
+  TCCR1B ^= (1 << ICES1); // Inverte a borda
+}
+
+ISR(TIMER0_OVF_vect)
+{
+  cont0++;
+  if (cont0 == 1000)
+  {
+    leADC_f = ((leADC_f * 5.0) / 1023.0) / 0.01;
+    leADC_i = (int)leADC_f;
+    cont0 = 0;
+  }
+
+  TCNT0 = 99; // TCT0 recebe o valor 99 para o timer de  0.1s
+}
+
+ISR(ADC_vect)
+{
+  leADC_f = ADC;
+}
