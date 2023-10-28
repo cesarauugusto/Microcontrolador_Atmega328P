@@ -1,0 +1,1 @@
+Este SDK_N1 é a junção de dois programas para testar uma placa que foi confecionada na discplina, ele é a junção do programa de gravar uma senha com teclado numero e com uma tela de LCD o codigo interrupção com dois display.
